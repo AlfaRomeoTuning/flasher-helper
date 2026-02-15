@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
-use socketcan::{CanFrame, CanSocket, EmbeddedAddrStruct, Socket, Frame};
+use socketcan::{Socket, Frame};
+use socketcan::EmbeddedFrame;
 use tokio::time::sleep;
 use tracing::{info, warn, error};
 use anyhow::Result;
@@ -12,7 +13,7 @@ pub struct SharedState {
 pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Result<()> {
     loop {
         info!("Opening SocketCAN interface: {}", interface);
-        let socket = match CanSocket::open(interface) {
+        let mut tokio_socket = match socketcan::tokio::CanSocket::open(interface) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to open socket {}: {}. Retrying in 5s...", interface, e);
@@ -20,11 +21,6 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
                 continue;
             }
         };
-
-        // We use the tokio-compatible socket provided by the socketcan crate's tokio feature.
-        // However, the standard CanSocket from socketcan 3.3 can be made non-blocking and used with Tokio.
-        socket.set_nonblocking(true)?;
-        let mut tokio_socket = socketcan::tokio::CanSocket::from_socket(socket)?;
 
         info!("Listening for VIN frames on ID 0x416...");
         
@@ -34,12 +30,14 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
         loop {
             match tokio_socket.read_frame().await {
                 Ok(frame) => {
-                    if frame.id().as_raw() != 0x416 {
-                        continue;
-                    }
+                    // In socketcan 3.x, CanFrame is an enum.
+                    // We extract the ID and data by matching on the Data variant.
+                    let (id, data) = match frame {
+                        socketcan::CanFrame::Data(f) => (f.raw_id(), f.data().to_vec()),
+                        _ => continue,
+                    };
 
-                    let data = frame.data();
-                    if data.is_empty() {
+                    if id != 0x416 {
                         continue;
                     }
 
