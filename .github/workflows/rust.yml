@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Install dependencies
       run: |
@@ -37,8 +37,12 @@ jobs:
     - name: Build Release for Cortex-A7
       run: cargo build --release --target armv7-unknown-linux-gnueabihf --verbose
 
-    - name: Upload Cortex-A7 Release Binary
-      uses: actions/upload-artifact@v3
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      if: startsWith(github.ref, 'refs/tags/')
       with:
-        name: flasher-helper-cortex-a7
-        path: target/armv7-unknown-linux-gnueabihf/release/flasher-helper
+        files: target/armv7-unknown-linux-gnueabihf/release/flasher-helper
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
