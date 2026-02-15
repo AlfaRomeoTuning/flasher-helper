@@ -31,8 +31,14 @@ async fn main() -> anyhow::Result<()> {
     // Build the API router
     let app = api::create_router(state);
 
-    // Run the HTTP server on 127.0.0.1:3000
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // Parse port from command-line arguments (default: 3000)
+    let port: u16 = std::env::args()
+        .nth(1)
+        .and_then(|arg| arg.parse().ok())
+        .unwrap_or(3000);
+
+    // Run the HTTP server
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!("Starting HTTP API on http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

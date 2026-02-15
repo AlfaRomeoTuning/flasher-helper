@@ -17,6 +17,10 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
+        sudo apt-get install -y gcc-arm-linux-gnueabihf
+
+    - name: Install Rust toolchain for ARM
+      run: rustup target add armv7-unknown-linux-gnueabihf
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
@@ -29,3 +33,12 @@ jobs:
 
     - name: Run tests
       run: cargo test --verbose
+
+    - name: Build Release for Cortex-A7
+      run: cargo build --release --target armv7-unknown-linux-gnueabihf --verbose
+
+    - name: Upload Cortex-A7 Release Binary
+      uses: actions/upload-artifact@v3
+      with:
+        name: flasher-helper-cortex-a7
+        path: target/armv7-unknown-linux-gnueabihf/release/flasher-helper
