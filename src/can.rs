@@ -37,7 +37,6 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
         
         let mut vin_buffer = vec![0u8; 17];
         let mut received_indices = [false; 3];
-        let mut last_status_update = std::time::Instant::now() - Duration::from_secs(1);
 
         loop {
             match tokio_socket.read_frame().await {
@@ -94,24 +93,29 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
                                 }
                             }
                         }
-                        0x41A | 0xFA => {
-                            if last_status_update.elapsed() < Duration::from_secs(1) {
-                                continue;
-                            }
-
+                        0x41A => {
                             let mut status = state.status.write().unwrap();
-                            if id == 0x41A {
-                                // BatteryVoltageLevelHP : 7|9@0+ (0.025,4)
+                            let should_update = status.last_battery_time
+                                .map(|t| t.elapsed() >= Duration::from_secs(1))
+                                .unwrap_or(true);
+
+                            if should_update && data.len() >= 2 {
                                 let raw = ((data[0] as u16) << 1) | ((data[1] >> 7) as u16);
                                 status.battery_voltage = Some((raw as f32) * 0.025 + 4.0);
                                 status.last_battery_time = Some(std::time::Instant::now());
-                            } else if id == 0xFA {
-                                // KeyInIgnSts : 43|2@0+
+                            }
+                        }
+                        0xFA => {
+                            let mut status = state.status.write().unwrap();
+                            let should_update = status.last_ignition_time
+                                .map(|t| t.elapsed() >= Duration::from_secs(1))
+                                .unwrap_or(true);
+
+                            if should_update && data.len() >= 6 {
                                 let raw = (data[5] >> 2) & 0x03;
                                 status.ignition_sts = Some(raw);
                                 status.last_ignition_time = Some(std::time::Instant::now());
                             }
-                            last_status_update = std::time::Instant::now();
                         }
                         _ => {}
                     }
