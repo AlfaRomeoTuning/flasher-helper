@@ -17,6 +17,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(SharedState {
         vin: RwLock::new(None),
+        status: RwLock::new(crate::can::StatusData::default()),
     });
 
     // Spawn CAN listener task

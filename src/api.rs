@@ -19,6 +19,7 @@ struct VinResponse {
 pub fn create_router(state: Arc<SharedState>) -> Router {
     Router::new()
         .route("/vin", get(get_vin))
+        .route("/status", get(get_status))
         .route("/shutdown", post(shutdown))
         .with_state(state)
 }
@@ -26,6 +27,11 @@ pub fn create_router(state: Arc<SharedState>) -> Router {
 async fn get_vin(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
     let vin = state.vin.read().unwrap().clone();
     Json(VinResponse { vin })
+}
+
+async fn get_status(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
+    let status = state.status.read().unwrap().clone();
+    Json(status)
 }
 
 async fn shutdown() -> impl IntoResponse {

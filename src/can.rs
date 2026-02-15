@@ -6,8 +6,15 @@ use tokio::time::sleep;
 use tracing::{info, warn, error};
 use anyhow::Result;
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct StatusData {
+    pub battery_voltage: f32,
+    pub ignition_sts: u8,
+}
+
 pub struct SharedState {
     pub vin: RwLock<Option<String>>,
+    pub status: RwLock<StatusData>,
 }
 
 pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Result<()> {
@@ -26,73 +33,91 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
         
         let mut vin_buffer = vec![0u8; 17];
         let mut received_indices = [false; 3];
+        let mut last_status_update = std::time::Instant::now() - Duration::from_secs(1);
 
         loop {
             match tokio_socket.read_frame().await {
                 Ok(frame) => {
-                    // In socketcan 3.x, CanFrame is an enum.
-                    // We extract the ID and data by matching on the Data variant.
                     let (id, data) = match frame {
                         socketcan::CanFrame::Data(f) => (f.raw_id(), f.data().to_vec()),
                         _ => continue,
                     };
 
-                    if id != 0x416 {
-                        continue;
-                    }
+                    match id {
+                        0x416 => {
+                            let seq_index = data[0];
+                            let vin_part = &data[1..];
 
-                    let seq_index = data[0];
-                    let vin_part = &data[1..];
-
-                    match seq_index {
-                        0 => {
-                            let len = vin_part.len().min(7);
-                            vin_buffer[0..len].copy_from_slice(&vin_part[..len]);
-                            received_indices[0] = true;
-                        }
-                        1 => {
-                            let len = vin_part.len().min(7);
-                            vin_buffer[7..7+len].copy_from_slice(&vin_part[..len]);
-                            received_indices[1] = true;
-                        }
-                        2 => {
-                            let len = vin_part.len().min(3); // VIN is 17 chars: 7 + 7 + 3
-                            vin_buffer[14..14+len].copy_from_slice(&vin_part[..len]);
-                            received_indices[2] = true;
-                        }
-                        _ => {
-                            warn!("Received unexpected sequence index: {:02X}", seq_index);
-                            continue;
-                        }
-                    }
-
-                    if received_indices.iter().all(|&r| r) {
-                        // Reconstructed VIN
-                        let vin = String::from_utf8_lossy(&vin_buffer)
-                            .trim_matches(char::from(0))
-                            .to_string();
-                        
-                        if vin.len() == 17 {
-                            info!("VIN reconstructed: {}", vin);
-                            {
-                                let mut w = state.vin.write().unwrap();
-                                *w = Some(vin);
+                            match seq_index {
+                                0 => {
+                                    let len = vin_part.len().min(7);
+                                    vin_buffer[0..len].copy_from_slice(&vin_part[..len]);
+                                    received_indices[0] = true;
+                                }
+                                1 => {
+                                    let len = vin_part.len().min(7);
+                                    vin_buffer[7..7+len].copy_from_slice(&vin_part[..len]);
+                                    received_indices[1] = true;
+                                }
+                                2 => {
+                                    let len = vin_part.len().min(3);
+                                    vin_buffer[14..14+len].copy_from_slice(&vin_part[..len]);
+                                    received_indices[2] = true;
+                                }
+                                _ => {
+                                    warn!("Received unexpected sequence index: {:02X}", seq_index);
+                                    continue;
+                                }
                             }
 
-                            info!("Pausing CAN listening for 60 seconds...");
-                            sleep(Duration::from_secs(60)).await;
-                            
-                            // Reset for next reconstruction
-                            received_indices = [false; 3];
-                        } else {
-                            warn!("Reconstructed VIN has invalid length: {} (expected 17)", vin.len());
-                            // Optional: Reset indices if we get partial/corrupt data
+                            if received_indices.iter().all(|&r| r) {
+                                let vin = String::from_utf8_lossy(&vin_buffer)
+                                    .trim_matches(char::from(0))
+                                    .to_string();
+                                
+                                if vin.len() == 17 {
+                                    info!("VIN reconstructed: {}", vin);
+                                    {
+                                        let mut w = state.vin.write().unwrap();
+                                        *w = Some(vin);
+                                    }
+
+                                    info!("Pausing CAN listening for 60 seconds...");
+                                    sleep(Duration::from_secs(60)).await;
+                                    received_indices = [false; 3];
+                                } else {
+                                    warn!("Reconstructed VIN has invalid length: {} (expected 17)", vin.len());
+                                }
+                            }
                         }
+                        0x41A | 0xFA => {
+                            if last_status_update.elapsed() < Duration::from_secs(1) {
+                                continue;
+                            }
+
+                            let mut status = state.status.write().unwrap();
+                            if id == 0x41A {
+                                // BatteryVoltageLevelHP : 7|9@0+ (0.025,4)
+                                // Motorola (Big Endian) 9 bits starting at bit 7.
+                                // Bit 7 is byte 0 bit 7 (MSB of byte 0).
+                                // 9 bits from bit 7 (going down): 7, 6, 5, 4, 3, 2, 1, 0, 15 (next byte)
+                                // raw = ((data[0] as u16) << 1) | ((data[1] >> 7) as u16);
+                                let raw = ((data[0] as u16) << 1) | ((data[1] >> 7) as u16);
+                                status.battery_voltage = (raw as f32) * 0.025 + 4.0;
+                            } else if id == 0xFA {
+                                // KeyInIgnSts : 43|2@0+
+                                // Byte 5 bit 3, 2 (43, 42)
+                                let raw = (data[5] >> 2) & 0x03;
+                                status.ignition_sts = raw;
+                            }
+                            last_status_update = std::time::Instant::now();
+                        }
+                        _ => {}
                     }
                 }
                 Err(e) => {
                     error!("Error reading CAN frame: {}", e);
-                    break; // Re-open socket
+                    break;
                 }
             }
         }
