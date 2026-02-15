@@ -91,8 +91,8 @@ jobs:
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: v${{ needs.build.outputs.new_version }}
-        name: v${{ needs.build.outputs.new_version }}
+        tag_name: v${{ steps.increment_version.outputs.new_version }}
+        name: v${{ steps.increment_version.outputs.new_version }}
         files: target/armv7-unknown-linux-gnueabihf/release/flasher-helper
         draft: false
         prerelease: false
