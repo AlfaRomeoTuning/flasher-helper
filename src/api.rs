@@ -7,7 +7,7 @@ use axum::{
 };
 use std::sync::Arc;
 use std::process::Command;
-use tracing::{info, warn, error};
+use tracing::{info, error};
 use serde::Serialize;
 use crate::can::SharedState;
 

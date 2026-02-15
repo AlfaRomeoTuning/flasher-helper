@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
-use socketcan::{Socket, Frame};
+use std::time::{Duration, Instant};
+use socketcan::{Frame};
 use socketcan::EmbeddedFrame;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tracing::{info, warn, error};
 use anyhow::Result;
 
@@ -24,7 +24,7 @@ pub struct SharedState {
 pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Result<()> {
     loop {
         info!("Opening SocketCAN interface: {}", interface);
-        let mut tokio_socket = match socketcan::tokio::CanSocket::open(interface) {
+        let tokio_socket = match socketcan::tokio::CanSocket::open(interface) {
             Ok(s) => s,
             Err(e) => {
                 error!("Failed to open socket {}: {}. Retrying in 5s...", interface, e);
@@ -37,10 +37,28 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
         
         let mut vin_buffer = vec![0u8; 17];
         let mut received_indices = [false; 3];
+        let mut vin_search_start: Option<Instant> = None;
 
         loop {
-            match tokio_socket.read_frame().await {
-                Ok(frame) => {
+            // Check if VIN search has timed out (60 seconds without completing)
+            if let Some(start) = vin_search_start {
+                if received_indices.iter().any(|&r| r) && start.elapsed() >= Duration::from_secs(60) {
+                    warn!("VIN search timeout after 60 seconds without completing all 3 packets");
+                    {
+                        let mut w = state.vin.write().unwrap();
+                        *w = None;
+                    }
+                    received_indices = [false; 3];
+                    vin_search_start = None;
+                }
+            }
+
+            // Use a short timeout (1 second) to allow VIN timeout check to run
+            // while still processing status packets independently
+            let frame_result = timeout(Duration::from_secs(1), tokio_socket.read_frame()).await;
+
+            match frame_result {
+                Ok(Ok(frame)) => {
                     let (id, data) = match frame {
                         socketcan::CanFrame::Data(f) => (f.raw_id(), f.data().to_vec()),
                         _ => continue,
@@ -48,6 +66,11 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
 
                     match id {
                         0x416 => {
+                            // Track when VIN search started
+                            if vin_search_start.is_none() && received_indices.iter().any(|&r| r) == false {
+                                vin_search_start = Some(Instant::now());
+                            }
+
                             let seq_index = data[0];
                             let vin_part = &data[1..];
 
@@ -87,10 +110,12 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
 
                                     info!("Pausing CAN listening for 60 seconds...");
                                     sleep(Duration::from_secs(60)).await;
-                                    received_indices = [false; 3];
                                 } else {
                                     warn!("Reconstructed VIN has invalid length: {} (expected 17)", vin.len());
                                 }
+                                
+                                received_indices = [false; 3];
+                                vin_search_start = None;
                             }
                         }
                         0x41A => {
@@ -120,9 +145,13 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
                         _ => {}
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     error!("Error reading CAN frame: {}", e);
                     break;
+                }
+                Err(_) => {
+                    // Timeout occurred, loop will check timeout condition above
+                    continue;
                 }
             }
         }
