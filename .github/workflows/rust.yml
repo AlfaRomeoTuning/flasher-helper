@@ -2,6 +2,22 @@ name: Rust CI
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+      - 'release/**'
+    paths-ignore:
+      - '.github/**'
+      - 'version'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths-ignore:
+      - '.github/**'
+      - 'version'
 
 permissions:
   contents: write
@@ -12,6 +28,9 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    outputs:
+      new_version: ${{ steps.increment_version.outputs.new_version }}
 
     steps:
     - uses: actions/checkout@v6
@@ -40,9 +59,40 @@ jobs:
     - name: Build Release for Cortex-A7
       run: cargo build --release --target armv7-unknown-linux-gnueabihf --verbose
 
+    - name: Set version
+      id: increment_version
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" && "${{ github.event_name }}" != "pull_request" ]]; then
+          # Increment version only for main branch
+          VERSION=$(sed -n 's/__version__ = "\([0-9]*\.[0-9]*\.[0-9]*\)"/\1/p' version)
+          IFS='.' read -r -a VERSION_PARTS <<< "$VERSION"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          sed -i "s/__version__ = \"$VERSION\"/__version__ = \"$NEW_VERSION\"/" version
+        else
+          # For other branches, just read current version
+          NEW_VERSION=$(sed -n 's/__version__ = "\([0-9]*\.[0-9]*\.[0-9]*\)"/\1/p' version)
+        fi
+        echo "New version: $NEW_VERSION"
+        echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+    
+    - name: Commit version changes
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      run: |
+        git config user.email "action@github.com"
+        git config user.name "GitHub Action"
+        git add version
+        git commit -m "Increment version to ${{ steps.increment_version.outputs.new_version }}"
+        git push origin main
+
     - name: Create GitHub Release
       uses: softprops/action-gh-release@v2
       with:
+        tag_name: v${{ needs.build.outputs.new_version }}
+        name: v${{ needs.build.outputs.new_version }}
         files: target/armv7-unknown-linux-gnueabihf/release/flasher-helper
         draft: false
         prerelease: false
