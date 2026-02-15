@@ -30,7 +30,26 @@ async fn get_vin(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
 }
 
 async fn get_status(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
-    let status = state.status.read().unwrap().clone();
+    let mut status = state.status.read().unwrap().clone();
+    let now = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+
+    if let Some(last_time) = status.last_battery_time {
+        if now.duration_since(last_time) > timeout {
+            status.battery_voltage = None;
+        }
+    } else {
+        status.battery_voltage = None;
+    }
+
+    if let Some(last_time) = status.last_ignition_time {
+        if now.duration_since(last_time) > timeout {
+            status.ignition_sts = None;
+        }
+    } else {
+        status.ignition_sts = None;
+    }
+
     Json(status)
 }
 

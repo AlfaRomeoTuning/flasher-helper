@@ -8,8 +8,12 @@ use anyhow::Result;
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct StatusData {
-    pub battery_voltage: f32,
-    pub ignition_sts: u8,
+    pub battery_voltage: Option<f32>,
+    pub ignition_sts: Option<u8>,
+    #[serde(skip)]
+    pub last_battery_time: Option<std::time::Instant>,
+    #[serde(skip)]
+    pub last_ignition_time: Option<std::time::Instant>,
 }
 
 pub struct SharedState {
@@ -98,17 +102,14 @@ pub async fn run_can_listener(interface: &str, state: Arc<SharedState>) -> Resul
                             let mut status = state.status.write().unwrap();
                             if id == 0x41A {
                                 // BatteryVoltageLevelHP : 7|9@0+ (0.025,4)
-                                // Motorola (Big Endian) 9 bits starting at bit 7.
-                                // Bit 7 is byte 0 bit 7 (MSB of byte 0).
-                                // 9 bits from bit 7 (going down): 7, 6, 5, 4, 3, 2, 1, 0, 15 (next byte)
-                                // raw = ((data[0] as u16) << 1) | ((data[1] >> 7) as u16);
                                 let raw = ((data[0] as u16) << 1) | ((data[1] >> 7) as u16);
-                                status.battery_voltage = (raw as f32) * 0.025 + 4.0;
+                                status.battery_voltage = Some((raw as f32) * 0.025 + 4.0);
+                                status.last_battery_time = Some(std::time::Instant::now());
                             } else if id == 0xFA {
                                 // KeyInIgnSts : 43|2@0+
-                                // Byte 5 bit 3, 2 (43, 42)
                                 let raw = (data[5] >> 2) & 0x03;
-                                status.ignition_sts = raw;
+                                status.ignition_sts = Some(raw);
+                                status.last_ignition_time = Some(std::time::Instant::now());
                             }
                             last_status_update = std::time::Instant::now();
                         }
