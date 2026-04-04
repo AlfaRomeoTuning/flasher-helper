@@ -2,15 +2,6 @@ name: Rust CI
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - develop
-      - 'feature/**'
-      - 'release/**'
-    paths-ignore:
-      - '.github/**'
-      - 'version'
   pull_request:
     branches:
       - main

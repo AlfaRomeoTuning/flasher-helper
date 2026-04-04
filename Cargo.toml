@@ -2,6 +2,7 @@
 name = "flasher-helper"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 axum = "0.7"
@@ -12,3 +13,7 @@ serde_json = "1.0"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+anyhow = "1.0"
+regex = "1.11"
