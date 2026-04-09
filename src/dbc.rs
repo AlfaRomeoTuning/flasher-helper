@@ -41,6 +41,45 @@ pub fn find_bus(interface: &str) -> Option<&'static BusDb> {
     buses().iter().find(|b| b.interface == interface)
 }
 
+#[derive(Debug)]
+pub struct BusMetadata {
+    pub bus_units: Vec<&'static str>,
+    pub messages_by_bu: HashMap<&'static str, Vec<&'static str>>,
+}
+
+pub fn metadata(interface: &str) -> Option<&'static BusMetadata> {
+    static METADATA: OnceLock<HashMap<&'static str, BusMetadata>> = OnceLock::new();
+
+    let map = METADATA.get_or_init(|| {
+        let mut out = HashMap::new();
+
+        for bus in buses() {
+            let mut messages_by_bu: HashMap<&'static str, Vec<&'static str>> = HashMap::new();
+            for bu in bus.bus_units {
+                messages_by_bu.insert(*bu, Vec::new());
+            }
+            for message in bus.messages {
+                messages_by_bu
+                    .entry(message.transmitter)
+                    .or_default()
+                    .push(message.name);
+            }
+
+            out.insert(
+                bus.interface,
+                BusMetadata {
+                    bus_units: bus.bus_units.iter().copied().collect(),
+                    messages_by_bu,
+                },
+            );
+        }
+
+        out
+    });
+
+    map.get(interface)
+}
+
 pub fn lookup_message(interface: &str, frame_id: u32) -> Option<&'static MessageDef> {
     static LOOKUP: OnceLock<HashMap<&'static str, HashMap<u32, &'static MessageDef>>> = OnceLock::new();
 

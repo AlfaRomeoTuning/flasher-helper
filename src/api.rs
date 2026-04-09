@@ -5,14 +5,14 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tracing::{info, error};
 use serde::{Deserialize, Serialize};
 use crate::can::{BuRole, DecodedMessageSnapshot, DecodedSignalValue, SharedState};
-use crate::dbc::{bu_matches_message, find_bus, lookup_message};
+use crate::dbc::{bu_matches_message, find_bus, lookup_message, metadata};
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -26,6 +26,7 @@ pub fn create_router(state: Arc<SharedState>) -> Router {
         .route("/vin", get(get_vin))
         .route("/status", get(get_status))
         .route("/can/:interface/:bu", get(get_can_data_by_bu))
+        .route("/can/:interface/metadata", get(get_can_metadata))
         .route("/shutdown", post(shutdown))
         .with_state(state)
 }
@@ -147,6 +148,45 @@ async fn get_can_data_by_bu(
         interface,
         bu,
         messages,
+    })
+    .into_response()
+}
+
+#[derive(Debug, Serialize)]
+struct CanMetadataResponse {
+    interface: String,
+    bus_units: Vec<String>,
+    messages_by_bu: BTreeMap<String, Vec<String>>,
+}
+
+async fn get_can_metadata(
+    Path(interface): Path<String>,
+    State(_state): State<Arc<SharedState>>,
+) -> impl IntoResponse {
+    let Some(metadata) = metadata(&interface) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!("unknown interface: {}", interface),
+            })),
+        )
+            .into_response();
+    };
+
+    let messages_by_bu = metadata
+        .messages_by_bu
+        .iter()
+        .map(|(bu, names)| (bu.to_string(), {
+            let mut sorted = names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+            sorted.sort();
+            sorted
+        }))
+        .collect::<BTreeMap<_, _>>();
+
+    Json(CanMetadataResponse {
+        interface,
+        bus_units: metadata.bus_units.iter().map(|b| b.to_string()).collect(),
+        messages_by_bu,
     })
     .into_response()
 }

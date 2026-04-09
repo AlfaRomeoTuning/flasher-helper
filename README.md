@@ -11,7 +11,8 @@ A Linux Rust service that monitors a SocketCAN interface for VIN data and provid
   - `GET /vin`: Returns the latest reconstructed VIN.
     - `GET /status`: Returns latest battery and ignition status with timeout-aware freshness.
   - `GET /can/{interface}/{bu}`: Returns latest decoded messages for a BU on a given interface.
-  - `POST /shutdown`: Safely shuts down the host machine.
+- `GET /can/{interface}/metadata`: Returns available bus units and message names for the requested interface.
+- `POST /shutdown`: Safely shuts down the host machine.
 - **Async Execution**: Built with Tokio and Axum.
 
 ## DBC Files
@@ -67,6 +68,34 @@ Example response:
       }
     }
   ]
+}
+```
+
+### `GET /can/{interface}/metadata`
+
+Returns the available bus units and message names defined for the requested interface.
+
+Path params:
+
+- `interface`: one of `can-bh`, `can-c1`, `can-c2`
+
+Example:
+
+```bash
+curl "http://127.0.0.1:3000/can/can-c1/metadata"
+```
+
+Example response:
+
+```json
+{
+  "interface": "can-c1",
+  "bus_units": ["BCM", "ECM", "ABS"],
+  "messages_by_bu": {
+    "BCM": ["BATTERY_INFO", "BCM_COMMAND"],
+    "ECM": ["ENGINE_STATUS", "RPM_INFO"],
+    "ABS": ["BRAKE_STATUS"]
+  }
 }
 ```
 
