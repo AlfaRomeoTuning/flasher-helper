@@ -65,10 +65,14 @@ pub fn metadata(interface: &str) -> Option<&'static BusMetadata> {
                     .push(message.name);
             }
 
+            for names in messages_by_bu.values_mut() {
+                names.sort_unstable();
+            }
+
             out.insert(
                 bus.interface,
                 BusMetadata {
-                    bus_units: bus.bus_units.iter().copied().collect(),
+                    bus_units: bus.bus_units.to_vec(),
                     messages_by_bu,
                 },
             );
@@ -81,7 +85,8 @@ pub fn metadata(interface: &str) -> Option<&'static BusMetadata> {
 }
 
 pub fn lookup_message(interface: &str, frame_id: u32) -> Option<&'static MessageDef> {
-    static LOOKUP: OnceLock<HashMap<&'static str, HashMap<u32, &'static MessageDef>>> = OnceLock::new();
+    static LOOKUP: OnceLock<HashMap<&'static str, HashMap<u32, &'static MessageDef>>> =
+        OnceLock::new();
 
     let map = LOOKUP.get_or_init(|| {
         let mut out = HashMap::new();
@@ -95,7 +100,8 @@ pub fn lookup_message(interface: &str, frame_id: u32) -> Option<&'static Message
         out
     });
 
-    map.get(interface).and_then(|by_id| by_id.get(&frame_id).copied())
+    map.get(interface)
+        .and_then(|by_id| by_id.get(&frame_id).copied())
 }
 
 pub fn bu_matches_message(message: &MessageDef, bu: &str, role: crate::can::BuRole) -> bool {

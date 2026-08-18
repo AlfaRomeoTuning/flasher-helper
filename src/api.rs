@@ -1,20 +1,22 @@
+use crate::can::{BuRole, DecodedMessageSnapshot, DecodedSignalValue, SharedState};
+use crate::dbc::{bu_matches_message, find_bus, lookup_message, metadata};
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
-use std::collections::{BTreeMap, HashSet};
-use std::sync::Arc;
-use std::process::Command;
-use std::time::{Duration, Instant};
-use tracing::{info, error};
 use serde::{Deserialize, Serialize};
-use crate::can::{BuRole, DecodedMessageSnapshot, DecodedSignalValue, SharedState};
-use crate::dbc::{bu_matches_message, find_bus, lookup_message, metadata};
+use std::collections::{BTreeMap, HashSet};
+use std::process::Command;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tracing::{error, info, warn};
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_TOKEN_ENV: &str = "FLASHER_SHUTDOWN_TOKEN";
+const SHUTDOWN_TOKEN_HEADER: &str = "x-shutdown-token";
 
 #[derive(Serialize)]
 struct VinResponse {
@@ -45,10 +47,10 @@ struct CanBuResponse {
 
 #[derive(Debug, Serialize)]
 struct CanMessageResponse {
-    message_name: String,
+    message_name: &'static str,
     dlc: u8,
     timestamp_ms: u128,
-    signals: std::collections::BTreeMap<String, DecodedSignalValue>,
+    signals: std::collections::BTreeMap<&'static str, DecodedSignalValue>,
 }
 
 async fn get_vin(State(state): State<Arc<SharedState>>) -> impl IntoResponse {
@@ -107,41 +109,44 @@ async fn get_can_data_by_bu(
     // Endpoint is intentionally TX-only: return only source messages for the requested BU.
     let role = BuRole::Tx;
 
-    let message_filter: Option<HashSet<String>> = query.messages.as_ref().map(|items| {
+    let message_filter: Option<HashSet<&str>> = query.messages.as_deref().map(|items| {
         items
             .split(',')
-            .map(|m| m.trim().to_string())
+            .map(str::trim)
             .filter(|m| !m.is_empty())
             .collect()
     });
 
-    let decoded = state.decoded.read().await;
-    let snapshots = decoded.get(&interface);
-    let mut messages = snapshots
-        .map(|map| {
-            map.values()
-                .filter(|snapshot| {
-                    if let Some(allowlist) = &message_filter {
-                        allowlist.contains(snapshot.message_name.as_str())
-                    } else {
-                        true
-                    }
-                })
-                .filter(|snapshot| {
-                    lookup_message(&interface, snapshot.frame_id)
-                        .map(|message_def| bu_matches_message(message_def, &bu, role))
-                        .unwrap_or(false)
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let mut messages = {
+        let decoded = state.decoded.read().await;
+        decoded
+            .get(interface.as_str())
+            .map(|map| {
+                map.values()
+                    .filter(|snapshot| {
+                        if let Some(allowlist) = &message_filter {
+                            allowlist.contains(snapshot.message_name)
+                        } else {
+                            true
+                        }
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
 
-    messages.sort_by(|a, b| a.message_name.cmp(&b.message_name));
+    messages.retain(|snapshot| {
+        lookup_message(&interface, snapshot.frame_id)
+            .map(|message_def| bu_matches_message(message_def, &bu, role))
+            .unwrap_or(false)
+    });
+
+    messages.sort_by(|a, b| a.message_name.cmp(b.message_name));
 
     let messages = messages
         .into_iter()
-        .map(|snapshot| map_snapshot_to_response(snapshot))
+        .map(map_snapshot_to_response)
         .collect::<Vec<_>>();
 
     Json(CanBuResponse {
@@ -155,8 +160,8 @@ async fn get_can_data_by_bu(
 #[derive(Debug, Serialize)]
 struct CanMetadataResponse {
     interface: String,
-    bus_units: Vec<String>,
-    messages_by_bu: BTreeMap<String, Vec<String>>,
+    bus_units: Vec<&'static str>,
+    messages_by_bu: BTreeMap<&'static str, Vec<&'static str>>,
 }
 
 async fn get_can_metadata(
@@ -176,16 +181,12 @@ async fn get_can_metadata(
     let messages_by_bu = metadata
         .messages_by_bu
         .iter()
-        .map(|(bu, names)| (bu.to_string(), {
-            let mut sorted = names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
-            sorted.sort();
-            sorted
-        }))
+        .map(|(bu, names)| (*bu, names.clone()))
         .collect::<BTreeMap<_, _>>();
 
     Json(CanMetadataResponse {
         interface,
-        bus_units: metadata.bus_units.iter().map(|b| b.to_string()).collect(),
+        bus_units: metadata.bus_units.clone(),
         messages_by_bu,
     })
     .into_response()
@@ -200,9 +201,29 @@ fn map_snapshot_to_response(snapshot: DecodedMessageSnapshot) -> CanMessageRespo
     }
 }
 
-async fn shutdown() -> impl IntoResponse {
+async fn shutdown(headers: HeaderMap) -> impl IntoResponse {
+    let expected_token = match std::env::var(SHUTDOWN_TOKEN_ENV) {
+        Ok(token) if !token.is_empty() => token,
+        _ => {
+            error!(
+                "{} is not set; refusing shutdown request",
+                SHUTDOWN_TOKEN_ENV
+            );
+            return (StatusCode::FORBIDDEN, "Shutdown is disabled");
+        }
+    };
+
+    let provided_token = headers
+        .get(SHUTDOWN_TOKEN_HEADER)
+        .and_then(|value| value.to_str().ok());
+
+    if provided_token != Some(expected_token.as_str()) {
+        warn!("Unauthorized shutdown request");
+        return (StatusCode::UNAUTHORIZED, "Unauthorized");
+    }
+
     info!("Shutdown request received");
-    
+
     // Security: We execute the shutdown command using std::process::Command.
     // In a real production environment, the user running this process must have
     // the necessary permissions (e.g., via sudoers) to execute 'shutdown'.
@@ -213,7 +234,10 @@ async fn shutdown() -> impl IntoResponse {
         }
         Err(e) => {
             error!("Failed to execute shutdown command: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to initiate shutdown")
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to initiate shutdown",
+            )
         }
     }
 }

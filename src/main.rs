@@ -1,13 +1,13 @@
-mod can;
 mod api;
+mod can;
 mod dbc;
 
-use std::sync::Arc;
+use crate::can::SharedState;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use crate::can::SharedState;
 
 const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1";
@@ -17,8 +17,10 @@ const DEFAULT_INTERFACES: [&str; 3] = ["can-bh", "can-c1", "can-c2"];
 async fn main() -> anyhow::Result<()> {
     // Initialize logging
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| "flasher_helper=info".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "flasher_helper=info".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -31,10 +33,9 @@ async fn main() -> anyhow::Result<()> {
     // Spawn one listener per CAN interface.
     for interface in DEFAULT_INTERFACES {
         let can_state = Arc::clone(&state);
-        let interface_name = interface.to_string();
         tokio::spawn(async move {
-            if let Err(e) = can::run_can_listener(&interface_name, can_state).await {
-                tracing::error!("CAN listener task failed for {}: {}", interface_name, e);
+            if let Err(e) = can::run_can_listener(interface, can_state).await {
+                tracing::error!("CAN listener task failed for {}: {}", interface, e);
             }
         });
     }
@@ -53,8 +54,8 @@ async fn main() -> anyhow::Result<()> {
         })
         .unwrap_or(DEFAULT_PORT);
 
-    let bind_addr = std::env::var("FLASHER_BIND_ADDR")
-        .unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
+    let bind_addr =
+        std::env::var("FLASHER_BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
 
     // Run the HTTP server
     let addr = SocketAddr::from_str(&format!("{}:{}", bind_addr, port))?;

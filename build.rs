@@ -45,7 +45,16 @@ fn format_f64_literal(value: f64) -> String {
 
 fn parse_dbc(path: &Path) -> Result<Dbc> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(err) => {
+            println!(
+                "cargo:warning=DBC file contains invalid UTF-8; using lossy decoding: {}",
+                path.display()
+            );
+            String::from_utf8_lossy(&err.into_bytes()).into_owned()
+        }
+    };
 
     let msg_re = Regex::new(r"^BO_\s+(\d+)\s+([^:]+):\s+(\d+)\s+(\S+)\s*$")?;
     let sig_re = Regex::new(
@@ -112,7 +121,10 @@ fn emit_dbc_module(interface_name: &str, dbc: &Dbc, out: &mut String) {
     out.push_str("    use super::super::{MessageDef, SignalDef};\n");
 
     for (msg_idx, msg) in dbc.messages.iter().enumerate() {
-        out.push_str(&format!("    static MSG_{}_SIGNALS: &[SignalDef] = &[\n", msg_idx));
+        out.push_str(&format!(
+            "    static MSG_{}_SIGNALS: &[SignalDef] = &[\n",
+            msg_idx
+        ));
         for sig in &msg.signals {
             out.push_str(&format!(
                 "        SignalDef {{ name: \"{}\", start_bit: {}, bit_len: {}, little_endian: {}, is_signed: {}, factor: {}, offset: {}, unit: \"{}\" }},\n",
