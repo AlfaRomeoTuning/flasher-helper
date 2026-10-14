@@ -1,19 +1,19 @@
 # Flasher Helper
 
-A Linux Rust service that monitors a SocketCAN interface for VIN data and provides an HTTP API for VIN retrieval and system shutdown.
+A Linux Rust service that listens on multiple SocketCAN interfaces, decodes DBC-defined frames in real time, and exposes VIN/status/CAN data through an HTTP API.
 
 ## Features
-- **CAN Monitoring**: Listens on `can-c1` for VIN frames (ID 0x416).
-- **VIN Reconstruction**: Combines multi-frame ISO-TP-like sequence into a 17-char VIN.
-- **DBC-Based Decoding**: Uses 3 static DBC files (BH/C1/C2), converted at build time into Rust decoder tables.
-- **Multi-Interface Listening**: Listens concurrently on `can-bh`, `can-c1`, and `can-c2`.
-- **HTTP API**: 
-  - `GET /vin`: Returns the latest reconstructed VIN.
-    - `GET /status`: Returns latest battery and ignition status with timeout-aware freshness.
-  - `GET /can/{interface}/{bu}`: Returns latest decoded messages for a BU on a given interface.
-- `GET /can/{interface}/metadata`: Returns available bus units and message names for the requested interface.
-- `POST /shutdown`: Safely shuts down the host machine.
-- **Async Execution**: Built with Tokio and Axum.
+- **Concurrent multi-bus listening**: Continuously listens on `can-bh`, `can-c1`, and `can-c2` with automatic retry when a CAN socket cannot be opened.
+- **VIN reconstruction with timeout/cooldown**: Reconstructs a 17-character VIN from `can-c1` frame `0x416`, resets incomplete VIN sessions after timeout, and applies a cooldown after a successful VIN capture.
+- **Live vehicle status extraction**: Extracts battery voltage (`0x41A`) and ignition state (`0xFA`) on `can-c1`, with freshness handling via the `/status` endpoint.
+- **DBC-driven decoding**: Parses 3 DBC files at build time and generates static Rust decoder tables used for runtime frame decoding.
+- **Latest-frame snapshots per interface**: Keeps the latest decoded snapshot per frame ID for each interface, including raw value, scaled value, and unit metadata.
+- **HTTP API (Axum + Tokio)**:
+  - `GET /vin` — returns the latest reconstructed VIN.
+  - `GET /status` — returns battery/ignition status with timeout-aware freshness.
+  - `GET /can/{interface}/{bu}` — returns decoded TX messages for the requested bus unit, with optional `messages=` filtering.
+  - `GET /can/{interface}/metadata` — returns available bus units and per-BU message names.
+  - `POST /shutdown` — initiates host shutdown only when `FLASHER_SHUTDOWN_TOKEN` is configured and provided via `x-shutdown-token`.
 
 ## DBC Files
 
@@ -162,3 +162,7 @@ Transfer the compiled binary to your target Linux machine and run it:
 > [!IMPORTANT]
 > Ensure the `can-c1` interface is up and configured on the target machine:
 > `ip link set can-c1 up type can bitrate 500000`
+
+## Credits
+
+- Project by AlfaRomeoTuning — https://alfatuning.app/
