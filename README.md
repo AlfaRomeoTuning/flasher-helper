@@ -1,6 +1,7 @@
 # Flasher Helper
 
 A Linux Rust service that listens on multiple SocketCAN interfaces, decodes DBC-defined frames in real time, and exposes VIN/status/CAN data through an HTTP API.
+Designed for working with Alfa Romeo Giulia and Stelvio vehicle platforms.
 
 ## Features
 - **Concurrent multi-bus listening**: Continuously listens on `can-bh`, `can-c1`, and `can-c2` with automatic retry when a CAN socket cannot be opened.
